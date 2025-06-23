@@ -399,10 +399,22 @@ def create_directories():
     ]
 
     for directory in directories:
-        Path(directory).mkdir(parents=True, exist_ok=True)
+        try:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            # In production environments like Railway, directories might already exist
+            # or be created by the deployment process
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Permission denied creating directory: {directory}. This is normal in production environments.")
+            continue
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Error creating directory {directory}: {e}")
 
-# Create directories on import
-create_directories()
+# Don't create directories on import - let the application handle this during startup
+# create_directories()
 
 # Validate critical settings
 def validate_settings():
