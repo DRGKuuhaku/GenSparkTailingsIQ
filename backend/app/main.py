@@ -6,6 +6,7 @@ This module sets up the complete FastAPI application with all routers, middlewar
 security configurations, and startup logic for production deployment.
 """
 
+import os
 from fastapi import FastAPI, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -22,7 +23,7 @@ from typing import Dict, Any
 from .core.config import settings
 from .core.database import create_tables, get_db, init_db
 from .core.security import get_current_user, verify_token
-from .api import auth, documents, monitoring, query, compliance, synthetic_data, cds
+from .api import auth, synthetic_data
 from .api.admin import users as admin_users
 from .models.user import User, UserCreate, UserRole, UserStatus
 from .services.user_service import UserService
@@ -47,15 +48,18 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting TailingsIQ application...")
     try:
+        # Create required directories
+        await create_required_directories()
+        
         # Initialize database
         await init_database()
 
         # Initialize default users
         await init_default_users()
 
-        # Initialize CDS engine if enabled
-        if settings.CDS_ENABLED:
-            await init_cds_engine()
+        # CDS engine initialization removed - service doesn't exist yet
+        # if settings.CDS_ENABLED:
+        #     await init_cds_engine()
 
         logger.info("TailingsIQ application started successfully")
 
@@ -78,6 +82,16 @@ async def lifespan(app: FastAPI):
 
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
+
+async def create_required_directories():
+    """Create required directories if they don't exist"""
+    from .core.config import create_directories
+    try:
+        create_directories()
+        logger.info("Required directories created/verified successfully")
+    except Exception as e:
+        logger.warning(f"Directory creation warning (this may be normal in production): {e}")
+        # Don't fail startup for directory issues
 
 async def init_database():
     """Initialize database tables and connections"""
@@ -116,22 +130,6 @@ async def init_default_users():
     except Exception as e:
         logger.error(f"Error creating default users: {e}")
         raise
-
-async def init_cds_engine():
-    """Initialize Cross-Data Synthesis engine"""
-    try:
-        from .services.cds_engine import CDSEngine
-
-        # Initialize CDS engine with configuration
-        cds_engine = CDSEngine()
-        await cds_engine.initialize()
-
-        logger.info("CDS engine initialized successfully")
-
-    except Exception as e:
-        logger.error(f"CDS engine initialization failed: {e}")
-        # CDS is optional, don't fail startup
-        logger.warning("Continuing without CDS functionality")
 
 async def cleanup_background_tasks():
     """Clean up any running background tasks"""
@@ -275,18 +273,8 @@ async def health_check(db = Depends(get_db)):
         # Test database connection
         db.execute(text("SELECT 1"))
 
-        # Test CDS engine if enabled
+        # CDS engine health check removed - service doesn't exist yet
         cds_status = "disabled"
-        if settings.CDS_ENABLED:
-            try:
-                from .services.cds_engine import CDSEngine
-                cds_engine = CDSEngine()
-                if await cds_engine.health_check():
-                    cds_status = "healthy"
-                else:
-                    cds_status = "unhealthy"
-            except Exception as e:
-                cds_status = f"error: {str(e)}"
 
         return {
             "status": "healthy",
@@ -374,55 +362,11 @@ app.include_router(
 )
 
 app.include_router(
-    documents.router, 
-    prefix=f"{settings.API_V1_STR}/documents", 
-    tags=["documents"],
-    dependencies=[Depends(get_current_user)]
-)
-
-app.include_router(
-    monitoring.router, 
-    prefix=f"{settings.API_V1_STR}/monitoring", 
-    tags=["monitoring"],
-    dependencies=[Depends(get_current_user)]
-)
-
-app.include_router(
-    query.router, 
-    prefix=f"{settings.API_V1_STR}/query", 
-    tags=["ai-query"],
-    dependencies=[Depends(get_current_user)]
-)
-
-app.include_router(
-    compliance.router, 
-    prefix=f"{settings.API_V1_STR}/compliance", 
-    tags=["compliance"],
-    dependencies=[Depends(get_current_user)]
-)
-
-app.include_router(
-    admin_users.router, 
-    prefix=f"{settings.API_V1_STR}/admin/users", 
-    tags=["admin"],
-    dependencies=[Depends(get_current_user)]
-)
-
-app.include_router(
     synthetic_data.router, 
     prefix=f"{settings.API_V1_STR}/synthetic-data", 
     tags=["synthetic-data"],
     dependencies=[Depends(get_current_user)]
 )
-
-# Include CDS router if enabled
-if settings.CDS_ENABLED:
-    app.include_router(
-        cds.router,
-        prefix=f"{settings.API_V1_STR}/cds",
-        tags=["cross-data-synthesis"],
-        dependencies=[Depends(get_current_user)]
-    )
 
 # Store startup time
 @app.on_event("startup")
