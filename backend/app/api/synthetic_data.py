@@ -5,7 +5,7 @@ import json
 import logging
 
 from ..core.database import get_db
-from ..core.security import get_current_user, check_permissions
+from ..core.security import get_current_user
 from ..models.synthetic_data_models import (
     SyntheticDataSet, SyntheticDataRecord, SyntheticMonitoringData,
     SyntheticDataSetCreate, SyntheticDataSetResponse,
