@@ -6,6 +6,7 @@ uvicorn[standard]==0.24.0
 sqlalchemy==2.0.23
 alembic==1.13.1
 psycopg2-binary==2.9.9
+asyncpg==0.29.0
 
 # Caching and search
 redis==5.0.1
@@ -15,6 +16,8 @@ elasticsearch==8.11.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
+PyJWT==2.8.0
+email-validator==2.1.0
 
 # AI and ML
 sentence-transformers==2.2.2
@@ -49,3 +52,9 @@ names==0.3.0
 
 # Extra additions
 itsdangerous==2.1.2
+
+# System monitoring (optional)
+psutil==5.9.6
+
+# Additional utilities
+python-dateutil==2.8.2
