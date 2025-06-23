@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 RUN python -m spacy download en_core_web_sm
 
 # ---------------- App code -------------------
-COPY . .                      # copies everything in backend/ into /app
+COPY . .
 
 # ---------------- Runtime dirs & ownership ----
 RUN mkdir -p /app/backups /app/uploads /app/chroma_db /app/logs \
