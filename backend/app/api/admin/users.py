@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from ..core.database import get_db
-from ..core.security import get_current_user, get_current_active_user
-from ..models.user import User, UserCreate, UserUpdate, UserResponse, UserRole, UserStatus
-from ..services.user_service import UserService
+from ...core.database import get_db
+from ...core.security import get_current_user
+from ...api.auth import get_current_active_user
+from ...models.user import User, UserCreate, UserUpdate, UserResponse, UserRole, UserStatus
+from ...services.user_service import UserService
 import logging
 
 logger = logging.getLogger(__name__)
