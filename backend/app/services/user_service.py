@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
