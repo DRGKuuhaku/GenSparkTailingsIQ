@@ -46,3 +46,6 @@ pytest-asyncio==0.21.1
 # Synthetic data generation
 faker==21.0.0
 names==0.3.0
+
+# Extra additions
+itsdangerous==2.1.2
