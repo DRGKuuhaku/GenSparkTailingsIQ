@@ -24,9 +24,10 @@ RUN python -m spacy download en_core_web_sm
 # Copy application code
 COPY . .
 
-# Create necessary directories and set permissions
-RUN mkdir -p uploads chroma_db logs &&     chown -R tailingsiq:tailingsiq /app
-
+# Create all runtime dirs and fix ownership
+RUN mkdir -p /app/backups /app/uploads /app/chroma_db /app/logs \
+    && chown -R tailingsiq:tailingsiq /app
+    
 # Switch to non-root user
 USER tailingsiq
 
