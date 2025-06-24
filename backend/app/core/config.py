@@ -355,9 +355,9 @@ class ProductionSettings(Settings):
     WORKERS: int = 4
 
     # Override with secure defaults
-    @property
-    def ALLOWED_HOSTS(self) -> List[str]:
-        return self.get_allowed_hosts()
+    #@property
+    #def ALLOWED_HOSTS(self) -> List[str]:
+        #return self.get_allowed_hosts()
 
 class TestingSettings(Settings):
     """Testing environment settings"""
