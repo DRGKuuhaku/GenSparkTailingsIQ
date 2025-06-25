@@ -16,7 +16,7 @@ import {
 import {
   Dashboard,
   Description,
-  Monitoring,
+  MonitorHeart,
   SmartToy,
   Assessment,
   People,
@@ -47,7 +47,7 @@ const navigationItems = [
   },
   {
     text: 'Monitoring',
-    icon: <Monitoring />,
+    icon: <MonitorHeart />,
     path: '/monitoring',
     permission: 'canViewMonitoring',
   },
