@@ -12,6 +12,8 @@ import { UserRoleProvider } from './contexts/UserRoleContext';
 import ErrorBoundary from './components/common/ErrorBoundary';
 
 import './styles/App.css';
+// Web Vitals reporting
+import { getCLS, getFID, getFCP, getLCP, getTTFB } from 'web-vitals';
 
 // Create a query client for React Query
 const queryClient = new QueryClient({
@@ -48,9 +50,6 @@ root.render(
     </ErrorBoundary>
   </React.StrictMode>
 );
-
-// Web Vitals reporting
-import { getCLS, getFID, getFCP, getLCP, getTTFB } from 'web-vitals';
 
 function sendToAnalytics(metric) {
   // In production, send to your analytics service
