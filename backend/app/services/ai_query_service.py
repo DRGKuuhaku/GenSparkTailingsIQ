@@ -11,8 +11,12 @@ from ..models.monitoring import MonitoringReading, MonitoringAlert
 from ..models.document import Document
 from ..models.compliance import ComplianceAssessment
 from ..models.user import User
+import openai
+import os
 
 logger = logging.getLogger(__name__)
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 @dataclass
 class QueryIntent:
@@ -328,61 +332,37 @@ class AIQueryService:
         start_time = time.time()
         
         try:
-            # Analyze query intent
-            intent = self._analyze_query_intent(query)
-            
-            # Gather relevant data
-            monitoring_data = self._gather_monitoring_data(db, intent)
-            document_data = self._gather_document_data(db, intent)
-            compliance_data = self._gather_compliance_data(db, intent)
-            
-            context_data = {
-                "monitoring": monitoring_data,
-                "documents": document_data,
-                "compliance": compliance_data
-            }
-            
-            # Generate response
-            response_text = self._generate_response(query, context_data, intent)
-            
-            # Analyze data trends
-            analysis = self._analyze_data_trends(monitoring_data + document_data + compliance_data) if include_analysis else {}
-            
-            # Generate recommendations
-            recommendations = self._generate_recommendations(intent, analysis) if include_analysis else []
-            
-            # Prepare data summary
-            data_summary = {
-                "monitoring_readings_count": len(monitoring_data),
-                "documents_count": len(document_data),
-                "compliance_assessments_count": len(compliance_data)
-            }
-            
-            # Prepare sources if requested
-            sources = []
-            if include_sources:
-                sources = self._prepare_sources(context_data)
-            
-            processing_time = time.time() - start_time
-            
-            return QueryResponse(
-                response=response_text,
-                query_intent=intent,
-                confidence_score=intent.confidence,
-                processing_time=processing_time,
-                analysis=analysis if include_analysis else None,
-                recommendations=recommendations if include_analysis else None,
-                data_summary=data_summary,
-                sources=sources if include_sources else None
+            # Call OpenAI API
+            completion = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",  # or "gpt-4" if you have access
+                messages=[
+                    {"role": "system", "content": "You are an AI assistant for tailings facility management."},
+                    {"role": "user", "content": query}
+                ]
             )
-            
-        except Exception as e:
-            logger.error(f"Error processing query: {e}")
+            ai_response = completion.choices[0].message.content
+
             processing_time = time.time() - start_time
-            
+
+            # You can still analyze intent, etc., as before
+            intent = self._analyze_query_intent(query)
+
             return QueryResponse(
-                response="I apologize, but I encountered an error while processing your query. Please try again or contact support if the issue persists.",
-                query_intent=QueryIntent(type="error", data_types=[], confidence=0.0),
+                response=ai_response,
+                query_intent=intent,
+                confidence_score=0.9,  # You can set this based on your logic
+                processing_time=processing_time,
+                analysis=None,
+                recommendations=None,
+                data_summary=None,
+                sources=None
+            )
+        except Exception as e:
+            logger.error(f"Error processing query with OpenAI: {e}")
+            processing_time = time.time() - start_time
+            return QueryResponse(
+                response="Sorry, there was an error processing your query with OpenAI.",
+                query_intent=self._analyze_query_intent(query),
                 confidence_score=0.0,
                 processing_time=processing_time
             )
