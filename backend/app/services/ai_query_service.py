@@ -1,751 +1,493 @@
-"""
-TailingsIQ - AI Query Service
-Advanced AI-powered query processing for TSF management
-
-This service provides intelligent query processing, document search,
-monitoring data analysis, and predictive insights for tailings management.
-"""
-
 import logging
-import asyncio
-from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime, timedelta
-import json
-import re
+import time
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
 
-# AI/ML imports
-from langchain.llms import OpenAI
-from langchain.chat_models import ChatOpenAI
-from langchain.embeddings import OpenAIEmbeddings, HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import LLMChain, ConversationalRetrievalChain
-from langchain.prompts import PromptTemplate
-from langchain.memory import ConversationBufferMemory
-from langchain.schema import Document
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import LLMChainExtractor
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-# Data processing
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
-
-# Database
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
-
-from ..core.config import settings
-from ..models.document import Document as DocumentModel, DocumentChunk
-from ..models.monitoring import MonitoringReading, MonitoringStation, MonitoringAlert
-from ..models.compliance import ComplianceAssessment, ComplianceRequirement
+from ..models.monitoring import MonitoringReading, Alert
+from ..models.document import Document
+from ..models.compliance import ComplianceAssessment
 from ..models.user import User
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class QueryIntent:
+    type: str
+    data_types: List[str]
+    time_range: Optional[str] = None
+    confidence: float = 0.0
+
+@dataclass
+class QueryResponse:
+    response: str
+    query_intent: QueryIntent
+    confidence_score: float
+    processing_time: float
+    analysis: Optional[Dict[str, List[str]]] = None
+    recommendations: Optional[List[str]] = None
+    data_summary: Optional[Dict[str, int]] = None
+    sources: Optional[List[Dict[str, Any]]] = None
+
 class AIQueryService:
-    """Advanced AI query processing service for TailingsIQ"""
-    
     def __init__(self):
-        self.llm = None
-        self.embeddings = None
-        self.vector_store = None
-        self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True
-        )
-        self._initialize_ai_components()
+        logger.info("AI Query Service initialized (fallback mode)")
     
-    def _initialize_ai_components(self):
-        """Initialize AI components based on configuration"""
+    def _analyze_query_intent(self, query: str) -> QueryIntent:
+        """Analyze the intent of a user query"""
         try:
-            # Initialize OpenAI components
-            if settings.OPENAI_API_KEY:
-                self.llm = ChatOpenAI(
-                    model_name=settings.OPENAI_MODEL,
-                    temperature=settings.OPENAI_TEMPERATURE,
-                    max_tokens=settings.OPENAI_MAX_TOKENS,
-                    openai_api_key=settings.OPENAI_API_KEY
-                )
-                self.embeddings = OpenAIEmbeddings(
-                    model=settings.OPENAI_EMBEDDING_MODEL,
-                    openai_api_key=settings.OPENAI_API_KEY
-                )
-                logger.info("OpenAI components initialized successfully")
-            else:
-                # Fallback to local models
-                self.embeddings = HuggingFaceEmbeddings(
-                    model_name=settings.HUGGINGFACE_MODEL
-                )
-                logger.warning("OpenAI not configured, using local embeddings only")
+            query_lower = query.lower()
             
-            # Initialize vector store
-            self._initialize_vector_store()
-            
-        except Exception as e:
-            logger.error(f"Error initializing AI components: {e}")
-            raise
-    
-    def _initialize_vector_store(self):
-        """Initialize ChromaDB vector store"""
-        try:
-            chroma_config = settings.get_chroma_config()
-            self.vector_store = Chroma(
-                persist_directory=chroma_config["persist_directory"],
-                embedding_function=self.embeddings,
-                collection_name=chroma_config["collection_name"]
-            )
-            logger.info("Vector store initialized successfully")
-        except Exception as e:
-            logger.error(f"Error initializing vector store: {e}")
-            raise
-    
-    async def process_query(self, 
-                          query: str, 
-                          user_id: int,
-                          db: Session,
-                          context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Process a natural language query and return intelligent response
-        
-        Args:
-            query: Natural language query from user
-            user_id: ID of the user making the query
-            db: Database session
-            context: Additional context (facility_id, date_range, etc.)
-        
-        Returns:
-            Dictionary containing response, sources, and metadata
-        """
-        try:
-            # Analyze query intent
-            intent = self._analyze_query_intent(query)
-            
-            # Get relevant data based on intent
-            relevant_data = await self._gather_relevant_data(
-                query, intent, user_id, db, context
-            )
-            
-            # Generate response based on intent and data
-            response = await self._generate_response(
-                query, intent, relevant_data, user_id, db
-            )
-            
-            # Add metadata and sources
-            response.update({
-                "query_intent": intent,
-                "sources": relevant_data.get("sources", []),
-                "confidence_score": relevant_data.get("confidence", 0.8),
-                "processing_time": relevant_data.get("processing_time", 0),
-                "timestamp": datetime.utcnow().isoformat()
-            })
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error processing query: {e}")
-            return {
-                "error": "Failed to process query",
-                "message": str(e),
-                "query_intent": "error",
-                "timestamp": datetime.utcnow().isoformat()
+            # Define intent patterns
+            intent_patterns = {
+                "alert": ["alert", "alarm", "critical", "warning", "issue", "problem"],
+                "monitoring": ["monitor", "reading", "sensor", "data", "trend", "level", "pressure"],
+                "document": ["document", "report", "file", "pdf", "analysis", "study"],
+                "compliance": ["compliance", "regulation", "requirement", "standard", "audit"],
+                "prediction": ["predict", "forecast", "future", "trend", "next", "upcoming"],
+                "analysis": ["analyze", "analysis", "insight", "pattern", "correlation"]
             }
-    
-    def _analyze_query_intent(self, query: str) -> Dict[str, Any]:
-        """Analyze the intent of the user query"""
-        query_lower = query.lower()
-        
-        intent = {
-            "type": "general",
-            "entities": [],
-            "data_types": [],
-            "time_range": None,
-            "facility_specific": False
-        }
-        
-        # Detect query types
-        if any(word in query_lower for word in ["monitor", "reading", "sensor", "data"]):
-            intent["type"] = "monitoring"
-            intent["data_types"].append("monitoring")
-        
-        if any(word in query_lower for word in ["document", "report", "file", "upload"]):
-            intent["type"] = "document"
-            intent["data_types"].append("document")
-        
-        if any(word in query_lower for word in ["compliance", "regulation", "requirement"]):
-            intent["type"] = "compliance"
-            intent["data_types"].append("compliance")
-        
-        if any(word in query_lower for word in ["predict", "forecast", "trend", "future"]):
-            intent["type"] = "prediction"
-            intent["data_types"].extend(["monitoring", "analysis"])
-        
-        if any(word in query_lower for word in ["alert", "warning", "critical", "issue"]):
-            intent["type"] = "alert"
-            intent["data_types"].append("monitoring")
-        
-        # Detect time references
-        time_patterns = {
-            "last_24h": r"last 24 hours?|yesterday|today",
-            "last_week": r"last week|past 7 days",
-            "last_month": r"last month|past 30 days",
-            "last_year": r"last year|past 12 months"
-        }
-        
-        for time_key, pattern in time_patterns.items():
-            if re.search(pattern, query_lower):
-                intent["time_range"] = time_key
-                break
-        
-        # Detect facility references
-        if re.search(r"facility|tsf|dam|site", query_lower):
-            intent["facility_specific"] = True
-        
-        return intent
-    
-    async def _gather_relevant_data(self, 
-                                  query: str, 
-                                  intent: Dict[str, Any],
-                                  user_id: int,
-                                  db: Session,
-                                  context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Gather relevant data based on query intent"""
-        relevant_data = {
-            "documents": [],
-            "monitoring_data": [],
-            "compliance_data": [],
-            "sources": [],
-            "confidence": 0.8,
-            "processing_time": 0
-        }
-        
-        start_time = datetime.utcnow()
-        
-        try:
-            # Get user permissions
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                raise ValueError("User not found")
             
-            # Gather document data if needed
-            if "document" in intent["data_types"]:
-                relevant_data["documents"] = await self._search_documents(
-                    query, user, db, context
-                )
+            # Determine primary intent
+            primary_intent = "general"
+            max_matches = 0
             
-            # Gather monitoring data if needed
-            if "monitoring" in intent["data_types"]:
-                relevant_data["monitoring_data"] = await self._get_monitoring_data(
-                    query, intent, user, db, context
-                )
+            for intent, keywords in intent_patterns.items():
+                matches = sum(1 for keyword in keywords if keyword in query_lower)
+                if matches > max_matches:
+                    max_matches = matches
+                    primary_intent = intent
             
-            # Gather compliance data if needed
-            if "compliance" in intent["data_types"]:
-                relevant_data["compliance_data"] = await self._get_compliance_data(
-                    query, intent, user, db, context
-                )
+            # Determine data types
+            data_types = []
+            if any(word in query_lower for word in ["water", "level", "sensor", "monitor"]):
+                data_types.append("monitoring")
+            if any(word in query_lower for word in ["document", "report", "file", "pdf"]):
+                data_types.append("documents")
+            if any(word in query_lower for word in ["compliance", "regulation", "requirement"]):
+                data_types.append("compliance")
             
-            # Calculate confidence based on data availability
-            total_sources = len(relevant_data["documents"]) + len(relevant_data["monitoring_data"]) + len(relevant_data["compliance_data"])
-            relevant_data["confidence"] = min(0.95, 0.5 + (total_sources * 0.1))
+            # Determine time range
+            time_range = None
+            if any(word in query_lower for word in ["today", "current", "now"]):
+                time_range = "current"
+            elif any(word in query_lower for word in ["week", "7 days"]):
+                time_range = "last_week"
+            elif any(word in query_lower for word in ["month", "30 days"]):
+                time_range = "last_month"
+            elif any(word in query_lower for word in ["quarter", "3 months"]):
+                time_range = "last_quarter"
+            elif any(word in query_lower for word in ["year", "annual"]):
+                time_range = "last_year"
             
-            relevant_data["processing_time"] = (datetime.utcnow() - start_time).total_seconds()
+            confidence = min(0.9, 0.3 + (max_matches * 0.2))
+            
+            return QueryIntent(
+                type=primary_intent,
+                data_types=data_types,
+                time_range=time_range,
+                confidence=confidence
+            )
             
         except Exception as e:
-            logger.error(f"Error gathering relevant data: {e}")
-            relevant_data["confidence"] = 0.3
-        
-        return relevant_data
+            logger.error(f"Error analyzing query intent: {e}")
+            return QueryIntent(type="general", data_types=[], confidence=0.1)
     
-    async def _search_documents(self, 
-                              query: str, 
-                              user: User, 
-                              db: Session,
-                              context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Search documents using semantic search"""
+    async def _gather_monitoring_data(self, db: AsyncSession, intent: QueryIntent) -> List[Dict[str, Any]]:
+        """Gather relevant monitoring data"""
         try:
-            # Get document chunks from database
-            chunks_query = db.query(DocumentChunk).join(DocumentModel)
+            data = []
             
-            # Apply user permissions
-            if user.role not in ["super_admin", "admin", "engineer_of_record"]:
-                # Filter by user's facility access
-                chunks_query = chunks_query.filter(DocumentModel.facility_id == user.facility_id)
+            # Get recent monitoring readings
+            query = select(MonitoringReading).order_by(MonitoringReading.timestamp.desc()).limit(50)
+            result = await db.execute(query)
+            readings = result.scalars().all()
             
-            # Apply context filters
-            if context and context.get("facility_id"):
-                chunks_query = chunks_query.filter(DocumentModel.facility_id == context["facility_id"])
-            
-            if context and context.get("document_type"):
-                chunks_query = chunks_query.filter(DocumentModel.document_type == context["document_type"])
-            
-            chunks = chunks_query.limit(50).all()
-            
-            if not chunks:
-                return []
-            
-            # Create documents for vector search
-            documents = []
-            for chunk in chunks:
-                doc = Document(
-                    page_content=chunk.chunk_text,
-                    metadata={
-                        "document_id": chunk.document_id,
-                        "chunk_index": chunk.chunk_index,
-                        "title": chunk.document.title,
-                        "document_type": chunk.document.document_type,
-                        "facility_id": chunk.document.facility_id
-                    }
-                )
-                documents.append(doc)
-            
-            # Perform semantic search
-            if self.vector_store and documents:
-                # Add documents to vector store temporarily
-                temp_store = Chroma.from_documents(
-                    documents=documents,
-                    embedding=self.embeddings
-                )
-                
-                # Search
-                results = temp_store.similarity_search_with_relevance_scores(
-                    query, k=10
-                )
-                
-                # Format results
-                search_results = []
-                for doc, score in results:
-                    if score > 0.7:  # Relevance threshold
-                        search_results.append({
-                            "content": doc.page_content,
-                            "metadata": doc.metadata,
-                            "relevance_score": score,
-                            "source": f"Document: {doc.metadata.get('title', 'Unknown')}"
-                        })
-                
-                return search_results
-            
-            return []
-            
-        except Exception as e:
-            logger.error(f"Error searching documents: {e}")
-            return []
-    
-    async def _get_monitoring_data(self, 
-                                 query: str, 
-                                 intent: Dict[str, Any],
-                                 user: User, 
-                                 db: Session,
-                                 context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Get relevant monitoring data"""
-        try:
-            # Build query
-            readings_query = db.query(MonitoringReading).join(MonitoringStation)
-            
-            # Apply time filter
-            if intent.get("time_range"):
-                time_filters = {
-                    "last_24h": datetime.utcnow() - timedelta(days=1),
-                    "last_week": datetime.utcnow() - timedelta(days=7),
-                    "last_month": datetime.utcnow() - timedelta(days=30),
-                    "last_year": datetime.utcnow() - timedelta(days=365)
-                }
-                if intent["time_range"] in time_filters:
-                    readings_query = readings_query.filter(
-                        MonitoringReading.timestamp >= time_filters[intent["time_range"]]
-                    )
-            
-            # Apply facility filter
-            if context and context.get("facility_id"):
-                readings_query = readings_query.filter(
-                    MonitoringStation.facility_id == context["facility_id"]
-                )
-            
-            # Get recent readings
-            readings = readings_query.order_by(
-                MonitoringReading.timestamp.desc()
-            ).limit(100).all()
-            
-            # Format data
-            monitoring_data = []
             for reading in readings:
-                monitoring_data.append({
-                    "station_id": reading.station_id,
+                data.append({
+                    "type": "monitoring",
                     "timestamp": reading.timestamp.isoformat(),
+                    "station": reading.station_name,
+                    "parameter": reading.parameter,
                     "value": reading.value,
-                    "unit": reading.unit,
-                    "alert_level": reading.alert_level,
-                    "is_anomaly": reading.is_anomaly,
-                    "metadata": reading.metadata
+                    "unit": reading.unit
                 })
             
-            return monitoring_data
+            # Get active alerts
+            alert_query = select(Alert).where(Alert.status == "active")
+            alert_result = await db.execute(alert_query)
+            alerts = alert_result.scalars().all()
+            
+            for alert in alerts:
+                data.append({
+                    "type": "alert",
+                    "timestamp": alert.created_at.isoformat(),
+                    "station": alert.station_name,
+                    "severity": alert.severity,
+                    "message": alert.message,
+                    "status": alert.status
+                })
+            
+            return data
             
         except Exception as e:
-            logger.error(f"Error getting monitoring data: {e}")
+            logger.error(f"Error gathering monitoring data: {e}")
             return []
     
-    async def _get_compliance_data(self, 
-                                 query: str, 
-                                 intent: Dict[str, Any],
-                                 user: User, 
-                                 db: Session,
-                                 context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Get relevant compliance data"""
+    async def _gather_document_data(self, db: AsyncSession, intent: QueryIntent) -> List[Dict[str, Any]]:
+        """Gather relevant document data"""
         try:
-            # Build query
-            assessments_query = db.query(ComplianceAssessment).join(ComplianceRequirement)
+            data = []
             
-            # Apply facility filter
-            if context and context.get("facility_id"):
-                assessments_query = assessments_query.filter(
-                    ComplianceAssessment.facility_id == context["facility_id"]
-                )
+            # Get recent documents
+            query = select(Document).order_by(Document.uploaded_at.desc()).limit(20)
+            result = await db.execute(query)
+            documents = result.scalars().all()
             
-            # Get recent assessments
-            assessments = assessments_query.order_by(
-                ComplianceAssessment.assessment_date.desc()
-            ).limit(20).all()
+            for doc in documents:
+                data.append({
+                    "type": "document",
+                    "id": doc.id,
+                    "title": doc.title,
+                    "category": doc.category,
+                    "uploaded_at": doc.uploaded_at.isoformat(),
+                    "file_size": doc.file_size,
+                    "description": doc.description or ""
+                })
             
-            # Format data
-            compliance_data = []
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error gathering document data: {e}")
+            return []
+    
+    async def _gather_compliance_data(self, db: AsyncSession, intent: QueryIntent) -> List[Dict[str, Any]]:
+        """Gather relevant compliance data"""
+        try:
+            data = []
+            
+            # Get recent compliance assessments
+            query = select(ComplianceAssessment).order_by(ComplianceAssessment.assessment_date.desc()).limit(20)
+            result = await db.execute(query)
+            assessments = result.scalars().all()
+            
             for assessment in assessments:
-                compliance_data.append({
-                    "requirement_id": assessment.requirement_id,
-                    "facility_id": assessment.facility_id,
+                data.append({
+                    "type": "compliance",
+                    "id": assessment.id,
+                    "regulation": assessment.regulation,
                     "assessment_date": assessment.assessment_date.isoformat(),
                     "status": assessment.status,
-                    "compliance_score": assessment.compliance_score,
-                    "risk_score": assessment.risk_score,
-                    "findings": assessment.findings
+                    "score": assessment.compliance_score,
+                    "notes": assessment.notes or ""
                 })
             
-            return compliance_data
+            return data
             
         except Exception as e:
-            logger.error(f"Error getting compliance data: {e}")
+            logger.error(f"Error gathering compliance data: {e}")
             return []
     
-    async def _generate_response(self, 
-                               query: str, 
-                               intent: Dict[str, Any],
-                               relevant_data: Dict[str, Any],
-                               user_id: int,
-                               db: Session) -> Dict[str, Any]:
-        """Generate intelligent response based on query and data"""
-        try:
-            if not self.llm:
-                return self._generate_fallback_response(query, intent, relevant_data)
+    def _generate_response(self, query: str, context_data: Dict[str, List[Dict[str, Any]]], intent: QueryIntent) -> str:
+        """Generate response based on query and available data"""
+        query_lower = query.lower()
+        
+        # Simple keyword-based responses
+        if any(word in query_lower for word in ["alert", "alarm", "critical"]):
+            alerts = context_data.get("monitoring", [])
+            alert_count = len([a for a in alerts if a.get("type") == "alert"])
             
-            # Create context from relevant data
-            context = self._create_context(relevant_data)
+            if alert_count > 0:
+                return f"I found {alert_count} active alerts in the system. Please check the monitoring dashboard for detailed information about these alerts and their severity levels."
+            else:
+                return "No active alerts are currently detected in the system. All monitoring parameters appear to be within normal ranges."
+        
+        elif any(word in query_lower for word in ["water", "level", "monitor"]):
+            readings = context_data.get("monitoring", [])
+            reading_count = len([r for r in readings if r.get("type") == "monitoring"])
             
-            # Create prompt based on intent
-            prompt = self._create_prompt(query, intent, context)
+            if reading_count > 0:
+                return f"I found {reading_count} recent monitoring readings. The latest water level and sensor data can be viewed in the monitoring dashboard. Consider checking for any trends or anomalies in the data."
+            else:
+                return "No recent monitoring data is available. Please check the monitoring system status and ensure sensors are functioning properly."
+        
+        elif any(word in query_lower for word in ["document", "report", "file"]):
+            docs = context_data.get("documents", [])
+            doc_count = len(docs)
             
-            # Generate response
-            response = await self.llm.agenerate([prompt])
+            if doc_count > 0:
+                return f"I found {doc_count} documents in the system. You can search and access these documents through the documents section. Recent uploads include various reports and analysis documents."
+            else:
+                return "No documents are currently available in the system. Consider uploading relevant reports, analysis documents, or compliance records."
+        
+        elif any(word in query_lower for word in ["compliance", "regulation", "requirement"]):
+            assessments = context_data.get("compliance", [])
+            assessment_count = len(assessments)
             
-            # Parse and format response
-            ai_response = response.generations[0][0].text.strip()
-            
-            # Add analysis and insights
-            analysis = self._analyze_data_for_insights(relevant_data, intent)
-            
-            return {
-                "response": ai_response,
-                "analysis": analysis,
-                "data_summary": self._create_data_summary(relevant_data),
-                "recommendations": self._generate_recommendations(relevant_data, intent),
-                "visualization_suggestions": self._suggest_visualizations(relevant_data, intent)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            return self._generate_fallback_response(query, intent, relevant_data)
+            if assessment_count > 0:
+                return f"I found {assessment_count} compliance assessments in the system. These assessments track regulatory compliance and can be reviewed in the compliance section."
+            else:
+                return "No compliance assessments are currently available. Consider conducting regular compliance reviews and uploading assessment results to the system."
+        
+        else:
+            return "I understand your query about the TSF system. To provide more specific information, I would need access to relevant data. Please check the monitoring dashboard, documents section, or compliance records for detailed information. If you have specific questions about alerts, water levels, documents, or compliance, I can help guide you to the appropriate data sources."
     
-    def _create_context(self, relevant_data: Dict[str, Any]) -> str:
-        """Create context string from relevant data"""
-        context_parts = []
-        
-        # Add document context
-        if relevant_data.get("documents"):
-            doc_summaries = []
-            for doc in relevant_data["documents"][:5]:  # Top 5 most relevant
-                doc_summaries.append(f"- {doc['metadata'].get('title', 'Unknown')}: {doc['content'][:200]}...")
-            context_parts.append("Relevant Documents:\n" + "\n".join(doc_summaries))
-        
-        # Add monitoring context
-        if relevant_data.get("monitoring_data"):
-            monitoring_summary = self._summarize_monitoring_data(relevant_data["monitoring_data"])
-            context_parts.append(f"Monitoring Data:\n{monitoring_summary}")
-        
-        # Add compliance context
-        if relevant_data.get("compliance_data"):
-            compliance_summary = self._summarize_compliance_data(relevant_data["compliance_data"])
-            context_parts.append(f"Compliance Data:\n{compliance_summary}")
-        
-        return "\n\n".join(context_parts)
-    
-    def _create_prompt(self, query: str, intent: Dict[str, Any], context: str) -> str:
-        """Create appropriate prompt based on query intent"""
-        
-        base_prompt = f"""
-You are an AI assistant specialized in Tailings Storage Facility (TSF) management. 
-You help engineers, operators, and managers with data analysis, compliance, and decision-making.
-
-User Query: {query}
-
-Context Information:
-{context}
-
-Please provide a comprehensive, professional response that:
-1. Directly addresses the user's question
-2. Uses the provided context data when relevant
-3. Provides actionable insights and recommendations
-4. Maintains technical accuracy for TSF management
-5. Suggests next steps or follow-up actions when appropriate
-
-Response:"""
-
-        # Add intent-specific instructions
-        if intent["type"] == "monitoring":
-            base_prompt += "\n\nFocus on monitoring data analysis, trends, and alerts."
-        elif intent["type"] == "compliance":
-            base_prompt += "\n\nFocus on compliance status, requirements, and regulatory implications."
-        elif intent["type"] == "prediction":
-            base_prompt += "\n\nFocus on trends, forecasting, and predictive insights."
-        elif intent["type"] == "alert":
-            base_prompt += "\n\nFocus on current alerts, risk assessment, and immediate actions."
-        
-        return base_prompt
-    
-    def _summarize_monitoring_data(self, monitoring_data: List[Dict[str, Any]]) -> str:
-        """Create summary of monitoring data"""
-        if not monitoring_data:
-            return "No monitoring data available."
-        
-        # Group by station
-        stations = {}
-        for reading in monitoring_data:
-            station_id = reading["station_id"]
-            if station_id not in stations:
-                stations[station_id] = []
-            stations[station_id].append(reading)
-        
-        summary_parts = []
-        for station_id, readings in stations.items():
-            latest = readings[0]  # Most recent
-            summary_parts.append(
-                f"Station {station_id}: {latest['value']} {latest['unit']} "
-                f"(Alert: {latest['alert_level']})"
-            )
-        
-        return "\n".join(summary_parts)
-    
-    def _summarize_compliance_data(self, compliance_data: List[Dict[str, Any]]) -> str:
-        """Create summary of compliance data"""
-        if not compliance_data:
-            return "No compliance data available."
-        
-        # Count by status
-        status_counts = {}
-        for assessment in compliance_data:
-            status = assessment["status"]
-            status_counts[status] = status_counts.get(status, 0) + 1
-        
-        summary_parts = []
-        for status, count in status_counts.items():
-            summary_parts.append(f"{status}: {count} assessments")
-        
-        return "Compliance Status: " + ", ".join(summary_parts)
-    
-    def _analyze_data_for_insights(self, relevant_data: Dict[str, Any], intent: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze data to provide insights"""
-        insights = {
-            "trends": [],
-            "anomalies": [],
-            "risks": [],
-            "opportunities": []
-        }
-        
-        # Analyze monitoring data for trends and anomalies
-        if relevant_data.get("monitoring_data"):
-            monitoring_insights = self._analyze_monitoring_insights(relevant_data["monitoring_data"])
-            insights.update(monitoring_insights)
-        
-        # Analyze compliance data for risks
-        if relevant_data.get("compliance_data"):
-            compliance_insights = self._analyze_compliance_insights(relevant_data["compliance_data"])
-            insights.update(compliance_insights)
-        
-        return insights
-    
-    def _analyze_monitoring_insights(self, monitoring_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze monitoring data for insights"""
-        insights = {
+    def _analyze_data_trends(self, data: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """Analyze data for trends and patterns"""
+        analysis = {
             "trends": [],
             "anomalies": [],
             "risks": []
         }
         
-        if not monitoring_data:
-            return insights
-        
-        # Group by station and parameter
-        station_data = {}
-        for reading in monitoring_data:
-            station_id = reading["station_id"]
-            if station_id not in station_data:
-                station_data[station_id] = []
-            station_data[station_id].append(reading)
-        
-        # Analyze each station
-        for station_id, readings in station_data.items():
-            # Check for anomalies
-            anomalies = [r for r in readings if r["is_anomaly"]]
-            if anomalies:
-                insights["anomalies"].append(f"Station {station_id}: {len(anomalies)} anomalous readings")
+        try:
+            # Simple trend analysis
+            if data:
+                # Check for alerts
+                alerts = [item for item in data if item.get("type") == "alert"]
+                if alerts:
+                    analysis["risks"].append(f"Found {len(alerts)} active alerts requiring attention")
+                
+                # Check for recent activity
+                recent_items = [item for item in data if "timestamp" in item]
+                if recent_items:
+                    analysis["trends"].append(f"Recent activity detected with {len(recent_items)} data points")
+                
+                # Check for compliance issues
+                compliance_items = [item for item in data if item.get("type") == "compliance"]
+                if compliance_items:
+                    low_scores = [item for item in compliance_items if item.get("score", 100) < 80]
+                    if low_scores:
+                        analysis["risks"].append(f"Found {len(low_scores)} compliance assessments with scores below 80%")
             
-            # Check for critical alerts
-            critical = [r for r in readings if r["alert_level"] == "critical"]
-            if critical:
-                insights["risks"].append(f"Station {station_id}: {len(critical)} critical alerts")
+        except Exception as e:
+            logger.error(f"Error analyzing data trends: {e}")
         
-        return insights
+        return analysis
     
-    def _analyze_compliance_insights(self, compliance_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze compliance data for insights"""
-        insights = {
-            "risks": [],
-            "opportunities": []
-        }
-        
-        if not compliance_data:
-            return insights
-        
-        # Count non-compliant assessments
-        non_compliant = [a for a in compliance_data if a["status"] == "non_compliant"]
-        if non_compliant:
-            insights["risks"].append(f"{len(non_compliant)} non-compliant assessments found")
-        
-        # Check for low compliance scores
-        low_scores = [a for a in compliance_data if a.get("compliance_score", 100) < 70]
-        if low_scores:
-            insights["risks"].append(f"{len(low_scores)} assessments with low compliance scores")
-        
-        return insights
-    
-    def _create_data_summary(self, relevant_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create summary of available data"""
-        summary = {
-            "documents_count": len(relevant_data.get("documents", [])),
-            "monitoring_readings_count": len(relevant_data.get("monitoring_data", [])),
-            "compliance_assessments_count": len(relevant_data.get("compliance_data", [])),
-            "data_sources": relevant_data.get("sources", [])
-        }
-        
-        return summary
-    
-    def _generate_recommendations(self, relevant_data: Dict[str, Any], intent: Dict[str, Any]) -> List[str]:
-        """Generate actionable recommendations"""
+    def _generate_recommendations(self, intent: QueryIntent, analysis: Dict[str, List[str]]) -> List[str]:
+        """Generate recommendations based on intent and analysis"""
         recommendations = []
         
-        # Add general recommendations based on intent
-        if intent["type"] == "monitoring":
-            recommendations.append("Review monitoring data trends regularly")
-            recommendations.append("Set up automated alerts for critical thresholds")
-        
-        if intent["type"] == "compliance":
-            recommendations.append("Schedule regular compliance assessments")
-            recommendations.append("Maintain up-to-date documentation")
-        
-        if intent["type"] == "prediction":
-            recommendations.append("Implement predictive maintenance schedules")
-            recommendations.append("Monitor key performance indicators")
+        try:
+            if intent.type == "alert":
+                recommendations.extend([
+                    "Review all active alerts immediately",
+                    "Check sensor calibration and maintenance schedules",
+                    "Update emergency response procedures if needed"
+                ])
+            
+            elif intent.type == "monitoring":
+                recommendations.extend([
+                    "Regularly review monitoring data for trends",
+                    "Set up automated alerts for critical parameters",
+                    "Schedule sensor maintenance and calibration"
+                ])
+            
+            elif intent.type == "compliance":
+                recommendations.extend([
+                    "Schedule regular compliance reviews",
+                    "Update compliance documentation as needed",
+                    "Train staff on regulatory requirements"
+                ])
+            
+            elif intent.type == "document":
+                recommendations.extend([
+                    "Organize documents by category and date",
+                    "Regularly update technical documentation",
+                    "Ensure all reports are properly archived"
+                ])
+            
+            # Add general recommendations
+            if analysis.get("risks"):
+                recommendations.append("Address identified risks promptly")
+            
+            if not recommendations:
+                recommendations.append("Continue monitoring system performance and data quality")
+                
+        except Exception as e:
+            logger.error(f"Error generating recommendations: {e}")
+            recommendations = ["Monitor system performance and data quality"]
         
         return recommendations
     
-    def _suggest_visualizations(self, relevant_data: Dict[str, Any], intent: Dict[str, Any]) -> List[str]:
-        """Suggest appropriate visualizations"""
-        visualizations = []
+    async def process_query(
+        self, 
+        query: str, 
+        db: AsyncSession, 
+        user: User,
+        include_sources: bool = True,
+        include_analysis: bool = True
+    ) -> QueryResponse:
+        """Process a user query and return AI response"""
+        start_time = time.time()
         
-        if relevant_data.get("monitoring_data"):
-            visualizations.extend([
-                "Time series chart of monitoring readings",
-                "Alert level distribution pie chart",
-                "Station performance comparison"
-            ])
-        
-        if relevant_data.get("compliance_data"):
-            visualizations.extend([
-                "Compliance status dashboard",
-                "Risk score heatmap",
-                "Assessment timeline"
-            ])
-        
-        return visualizations
-    
-    def _generate_fallback_response(self, query: str, intent: Dict[str, Any], relevant_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate fallback response when AI is not available"""
-        return {
-            "response": f"I understand you're asking about: {query}. I'm currently analyzing the available data to provide you with the most relevant information.",
-            "analysis": {"trends": [], "anomalies": [], "risks": [], "opportunities": []},
-            "data_summary": self._create_data_summary(relevant_data),
-            "recommendations": ["Contact your system administrator to enable AI features"],
-            "visualization_suggestions": []
-        }
-    
-    async def add_document_to_knowledge_base(self, document_id: int, db: Session) -> bool:
-        """Add a document to the AI knowledge base for future queries"""
         try:
-            # Get document and chunks
-            document = db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
-            if not document:
-                return False
+            # Analyze query intent
+            intent = self._analyze_query_intent(query)
             
-            chunks = db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).all()
+            # Gather relevant data
+            monitoring_data = await self._gather_monitoring_data(db, intent)
+            document_data = await self._gather_document_data(db, intent)
+            compliance_data = await self._gather_compliance_data(db, intent)
             
-            if not chunks:
-                return False
+            context_data = {
+                "monitoring": monitoring_data,
+                "documents": document_data,
+                "compliance": compliance_data
+            }
             
-            # Create documents for vector store
-            documents = []
-            for chunk in chunks:
-                doc = Document(
-                    page_content=chunk.chunk_text,
-                    metadata={
-                        "document_id": document.id,
-                        "chunk_index": chunk.chunk_index,
-                        "title": document.title,
-                        "document_type": document.document_type,
-                        "facility_id": document.facility_id
-                    }
-                )
-                documents.append(doc)
+            # Generate response
+            response_text = self._generate_response(query, context_data, intent)
             
-            # Add to vector store
-            if self.vector_store and documents:
-                self.vector_store.add_documents(documents)
-                logger.info(f"Added document {document_id} to knowledge base")
-                return True
+            # Analyze data trends
+            analysis = self._analyze_data_trends(monitoring_data + document_data + compliance_data) if include_analysis else {}
             
-            return False
+            # Generate recommendations
+            recommendations = self._generate_recommendations(intent, analysis) if include_analysis else []
+            
+            # Prepare data summary
+            data_summary = {
+                "monitoring_readings_count": len(monitoring_data),
+                "documents_count": len(document_data),
+                "compliance_assessments_count": len(compliance_data)
+            }
+            
+            # Prepare sources if requested
+            sources = []
+            if include_sources:
+                sources = self._prepare_sources(context_data)
+            
+            processing_time = time.time() - start_time
+            
+            return QueryResponse(
+                response=response_text,
+                query_intent=intent,
+                confidence_score=intent.confidence,
+                processing_time=processing_time,
+                analysis=analysis if include_analysis else None,
+                recommendations=recommendations if include_analysis else None,
+                data_summary=data_summary,
+                sources=sources if include_sources else None
+            )
             
         except Exception as e:
-            logger.error(f"Error adding document to knowledge base: {e}")
-            return False
+            logger.error(f"Error processing query: {e}")
+            processing_time = time.time() - start_time
+            
+            return QueryResponse(
+                response="I apologize, but I encountered an error while processing your query. Please try again or contact support if the issue persists.",
+                query_intent=QueryIntent(type="error", data_types=[], confidence=0.0),
+                confidence_score=0.0,
+                processing_time=processing_time
+            )
     
-    async def get_query_history(self, user_id: int, db: Session, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get user's query history"""
-        # This would typically query a query_history table
-        # For now, return empty list
-        return []
+    def _prepare_sources(self, context_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Prepare source information for the response"""
+        sources = []
+        
+        try:
+            for data_type, items in context_data.items():
+                for item in items[:5]:  # Limit to 5 items per type
+                    source = {
+                        "type": data_type,
+                        "id": item.get("id"),
+                        "title": item.get("title") or item.get("station") or f"{data_type.title()} Data",
+                        "timestamp": item.get("timestamp") or item.get("uploaded_at") or item.get("assessment_date"),
+                        "description": item.get("description") or item.get("message") or ""
+                    }
+                    sources.append(source)
+                    
+        except Exception as e:
+            logger.error(f"Error preparing sources: {e}")
+        
+        return sources
     
-    async def save_query(self, user_id: int, query: str, response: Dict[str, Any], db: Session) -> bool:
-        """Save query and response for history"""
-        # This would typically save to a query_history table
-        # For now, just log
-        logger.info(f"Query saved for user {user_id}: {query[:100]}...")
-        return True 
+    async def index_document_for_ai(self, document_content: str, document_id: str, metadata: Dict[str, Any]) -> bool:
+        """Index a document for AI search (placeholder for now)"""
+        logger.info(f"Document indexing requested for document {document_id} (not implemented in fallback mode)")
+        return True
+    
+    def get_ai_capabilities(self) -> Dict[str, Any]:
+        """Get AI system capabilities and status"""
+        return {
+            "ai_status": {
+                "langchain": False,
+                "openai": False,
+                "chromadb": False,
+                "vector_store": False,
+                "llm": False,
+                "embeddings": False
+            },
+            "query_types": {
+                "monitoring": {
+                    "description": "Query monitoring data, sensor readings, and alerts",
+                    "examples": [
+                        "What are the current monitoring alerts?",
+                        "Show me water level trends for the last month",
+                        "Are there any critical sensor readings?"
+                    ]
+                },
+                "documents": {
+                    "description": "Search and analyze documents and reports",
+                    "examples": [
+                        "Find documents about stability analysis",
+                        "Show me recent technical reports",
+                        "Search for compliance documentation"
+                    ]
+                },
+                "compliance": {
+                    "description": "Query compliance assessments and regulatory requirements",
+                    "examples": [
+                        "What compliance requirements are due this month?",
+                        "Show me recent compliance assessments",
+                        "Are we meeting regulatory standards?"
+                    ]
+                },
+                "analysis": {
+                    "description": "Get AI-powered analysis and insights",
+                    "examples": [
+                        "Analyze the risk factors for our TSF",
+                        "What trends do you see in the monitoring data?",
+                        "Provide recommendations for improving safety"
+                    ]
+                },
+                "prediction": {
+                    "description": "Get predictions and forecasts based on data",
+                    "examples": [
+                        "Predict water level trends for the next quarter",
+                        "Forecast potential issues based on current data",
+                        "What might happen if current trends continue?"
+                    ]
+                }
+            },
+            "features": {
+                "natural_language_processing": False,
+                "document_search": False,
+                "data_analysis": True,
+                "trend_analysis": True,
+                "recommendations": True,
+                "multi_source_integration": True
+            }
+        }
+    
+    def get_ai_health(self) -> Dict[str, Any]:
+        """Get AI system health status"""
+        return {
+            "status": "limited",
+            "components": {
+                "langchain": False,
+                "openai": False,
+                "chromadb": False,
+                "vector_store": False
+            },
+            "capabilities": {
+                "ai_responses": False,
+                "document_search": False,
+                "embeddings": False
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        } 
