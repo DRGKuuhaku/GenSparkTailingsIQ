@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from ..models.monitoring import MonitoringReading, Alert
+from ..models.monitoring import MonitoringReading, MonitoringAlert
 from ..models.document import Document
 from ..models.compliance import ComplianceAssessment
 from ..models.user import User
@@ -110,14 +110,15 @@ class AIQueryService:
                 data.append({
                     "type": "monitoring",
                     "timestamp": reading.timestamp.isoformat(),
-                    "station": reading.station_name,
-                    "parameter": reading.parameter,
+                    "station": reading.station_id,
                     "value": reading.value,
-                    "unit": reading.unit
+                    "unit": reading.unit,
+                    "quality_code": reading.quality_code,
+                    "alert_level": reading.alert_level
                 })
             
             # Get active alerts
-            alert_query = select(Alert).where(Alert.status == "active")
+            alert_query = select(MonitoringAlert).where(MonitoringAlert.is_active == True)
             alert_result = await db.execute(alert_query)
             alerts = alert_result.scalars().all()
             
@@ -125,10 +126,11 @@ class AIQueryService:
                 data.append({
                     "type": "alert",
                     "timestamp": alert.created_at.isoformat(),
-                    "station": alert.station_name,
-                    "severity": alert.severity,
+                    "station": alert.station_id,
+                    "alert_level": alert.alert_level,
                     "message": alert.message,
-                    "status": alert.status
+                    "alert_type": alert.alert_type,
+                    "is_active": alert.is_active
                 })
             
             return data
