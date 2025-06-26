@@ -368,6 +368,15 @@ app.include_router(
     dependencies=[Depends(get_current_user)]
 )
 
+# Import and include AI query router
+from .api import ai_query
+app.include_router(
+    ai_query.router, 
+    prefix=f"{settings.API_V1_STR}/query", 
+    tags=["ai-query"],
+    dependencies=[Depends(get_current_user)]
+)
+
 # Store startup time
 @app.on_event("startup")
 async def startup_event():
