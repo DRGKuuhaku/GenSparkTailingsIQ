@@ -1,495 +1,385 @@
+"""
+TailingsIQ - AI Query API
+API endpoints for AI-powered query processing
+
+This module provides REST API endpoints for natural language queries,
+document search, monitoring analysis, and predictive insights.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
+from sqlalchemy.orm import Session
+from typing import List, Dict, Any, Optional
 import logging
-import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-from ..models.monitoring import MonitoringReading, MonitoringAlert
-from ..models.document import Document
-from ..models.compliance import ComplianceAssessment
-from ..models.user import User
+from ..core.database import get_db
+from ..core.security import get_current_user
+from ..models.user import User, UserRole
+from ..services.ai_query_service import AIQueryService
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class QueryIntent:
-    type: str
-    data_types: List[str]
-    time_range: Optional[str] = None
-    confidence: float = 0.0
+router = APIRouter()
 
-@dataclass
-class QueryResponse:
+# Initialize AI query service
+ai_service = AIQueryService()
+
+# Pydantic models for request/response
+class AIQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=1000, description="Natural language query")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Additional context (facility_id, date_range, etc.)")
+    include_sources: bool = Field(default=True, description="Include source documents in response")
+    include_analysis: bool = Field(default=True, description="Include data analysis and insights")
+
+class AIQueryResponse(BaseModel):
     response: str
-    query_intent: QueryIntent
+    query_intent: Dict[str, Any]
+    analysis: Dict[str, Any]
+    data_summary: Dict[str, Any]
+    recommendations: List[str]
+    visualization_suggestions: List[str]
+    sources: List[str]
     confidence_score: float
     processing_time: float
-    analysis: Optional[Dict[str, List[str]]] = None
-    recommendations: Optional[List[str]] = None
-    data_summary: Optional[Dict[str, int]] = None
-    sources: Optional[List[Dict[str, Any]]] = None
+    timestamp: str
 
-class AIQueryService:
-    def __init__(self):
-        logger.info("AI Query Service initialized (fallback mode)")
+class QueryHistoryItem(BaseModel):
+    id: int
+    query: str
+    response_preview: str
+    timestamp: str
+    confidence_score: float
+
+class QueryHistoryResponse(BaseModel):
+    queries: List[QueryHistoryItem]
+    total_count: int
+
+@router.post("/submit", response_model=AIQueryResponse)
+def submit_ai_query(
+    request: AIQueryRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Submit a natural language query to the AI system
     
-    def _analyze_query_intent(self, query: str) -> QueryIntent:
-        """Analyze the intent of a user query"""
-        try:
-            query_lower = query.lower()
-            
-            # Define intent patterns
-            intent_patterns = {
-                "alert": ["alert", "alarm", "critical", "warning", "issue", "problem"],
-                "monitoring": ["monitor", "reading", "sensor", "data", "trend", "level", "pressure"],
-                "document": ["document", "report", "file", "pdf", "analysis", "study"],
-                "compliance": ["compliance", "regulation", "requirement", "standard", "audit"],
-                "prediction": ["predict", "forecast", "future", "trend", "next", "upcoming"],
-                "analysis": ["analyze", "analysis", "insight", "pattern", "correlation"]
-            }
-            
-            # Determine primary intent
-            primary_intent = "general"
-            max_matches = 0
-            
-            for intent, keywords in intent_patterns.items():
-                matches = sum(1 for keyword in keywords if keyword in query_lower)
-                if matches > max_matches:
-                    max_matches = matches
-                    primary_intent = intent
-            
-            # Determine data types
-            data_types = []
-            if any(word in query_lower for word in ["water", "level", "sensor", "monitor"]):
-                data_types.append("monitoring")
-            if any(word in query_lower for word in ["document", "report", "file", "pdf"]):
-                data_types.append("documents")
-            if any(word in query_lower for word in ["compliance", "regulation", "requirement"]):
-                data_types.append("compliance")
-            
-            # Determine time range
-            time_range = None
-            if any(word in query_lower for word in ["today", "current", "now"]):
-                time_range = "current"
-            elif any(word in query_lower for word in ["week", "7 days"]):
-                time_range = "last_week"
-            elif any(word in query_lower for word in ["month", "30 days"]):
-                time_range = "last_month"
-            elif any(word in query_lower for word in ["quarter", "3 months"]):
-                time_range = "last_quarter"
-            elif any(word in query_lower for word in ["year", "annual"]):
-                time_range = "last_year"
-            
-            confidence = min(0.9, 0.3 + (max_matches * 0.2))
-            
-            return QueryIntent(
-                type=primary_intent,
-                data_types=data_types,
-                time_range=time_range,
-                confidence=confidence
-            )
-            
-        except Exception as e:
-            logger.error(f"Error analyzing query intent: {e}")
-            return QueryIntent(type="general", data_types=[], confidence=0.1)
+    This endpoint processes natural language queries about:
+    - Monitoring data and trends
+    - Document search and analysis
+    - Compliance status and requirements
+    - Predictive insights and forecasting
+    - Alert analysis and risk assessment
+    """
     
-    async def _gather_monitoring_data(self, db: AsyncSession, intent: QueryIntent) -> List[Dict[str, Any]]:
-        """Gather relevant monitoring data"""
-        try:
-            data = []
-            
-            # Get recent monitoring readings
-            query = select(MonitoringReading).order_by(MonitoringReading.timestamp.desc()).limit(50)
-            result = await db.execute(query)
-            readings = result.scalars().all()
-            
-            for reading in readings:
-                data.append({
-                    "type": "monitoring",
-                    "timestamp": reading.timestamp.isoformat(),
-                    "station": reading.station_id,
-                    "value": reading.value,
-                    "unit": reading.unit,
-                    "quality_code": reading.quality_code,
-                    "alert_level": reading.alert_level
-                })
-            
-            # Get active alerts
-            alert_query = select(MonitoringAlert).where(MonitoringAlert.is_active == True)
-            alert_result = await db.execute(alert_query)
-            alerts = alert_result.scalars().all()
-            
-            for alert in alerts:
-                data.append({
-                    "type": "alert",
-                    "timestamp": alert.created_at.isoformat(),
-                    "station": alert.station_id,
-                    "alert_level": alert.alert_level,
-                    "message": alert.message,
-                    "alert_type": alert.alert_type,
-                    "is_active": alert.is_active
-                })
-            
-            return data
-            
-        except Exception as e:
-            logger.error(f"Error gathering monitoring data: {e}")
-            return []
+    # Check permissions
+    if not _has_ai_query_permission(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions to use AI query functionality"
+        )
     
-    async def _gather_document_data(self, db: AsyncSession, intent: QueryIntent) -> List[Dict[str, Any]]:
-        """Gather relevant document data"""
-        try:
-            data = []
-            
-            # Get recent documents
-            query = select(Document).order_by(Document.uploaded_at.desc()).limit(20)
-            result = await db.execute(query)
-            documents = result.scalars().all()
-            
-            for doc in documents:
-                data.append({
-                    "type": "document",
-                    "id": doc.id,
-                    "title": doc.title,
-                    "category": doc.category,
-                    "uploaded_at": doc.uploaded_at.isoformat(),
-                    "file_size": doc.file_size,
-                    "description": doc.description or ""
-                })
-            
-            return data
-            
-        except Exception as e:
-            logger.error(f"Error gathering document data: {e}")
-            return []
-    
-    async def _gather_compliance_data(self, db: AsyncSession, intent: QueryIntent) -> List[Dict[str, Any]]:
-        """Gather relevant compliance data"""
-        try:
-            data = []
-            
-            # Get recent compliance assessments
-            query = select(ComplianceAssessment).order_by(ComplianceAssessment.assessment_date.desc()).limit(20)
-            result = await db.execute(query)
-            assessments = result.scalars().all()
-            
-            for assessment in assessments:
-                data.append({
-                    "type": "compliance",
-                    "id": assessment.id,
-                    "regulation": assessment.regulation,
-                    "assessment_date": assessment.assessment_date.isoformat(),
-                    "status": assessment.status,
-                    "score": assessment.compliance_score,
-                    "notes": assessment.notes or ""
-                })
-            
-            return data
-            
-        except Exception as e:
-            logger.error(f"Error gathering compliance data: {e}")
-            return []
-    
-    def _generate_response(self, query: str, context_data: Dict[str, List[Dict[str, Any]]], intent: QueryIntent) -> str:
-        """Generate response based on query and available data"""
-        query_lower = query.lower()
+    try:
+        logger.info(f"Processing AI query from user {current_user.id}: {request.query[:100]}...")
         
-        # Simple keyword-based responses
-        if any(word in query_lower for word in ["alert", "alarm", "critical"]):
-            alerts = context_data.get("monitoring", [])
-            alert_count = len([a for a in alerts if a.get("type") == "alert"])
-            
-            if alert_count > 0:
-                return f"I found {alert_count} active alerts in the system. Please check the monitoring dashboard for detailed information about these alerts and their severity levels."
-            else:
-                return "No active alerts are currently detected in the system. All monitoring parameters appear to be within normal ranges."
+        # Process the query
+        result = ai_service.process_query(
+            query=request.query,
+            db=db,
+            user=current_user,
+            include_sources=request.include_sources,
+            include_analysis=request.include_analysis
+        )
         
-        elif any(word in query_lower for word in ["water", "level", "monitor"]):
-            readings = context_data.get("monitoring", [])
-            reading_count = len([r for r in readings if r.get("type") == "monitoring"])
-            
-            if reading_count > 0:
-                return f"I found {reading_count} recent monitoring readings. The latest water level and sensor data can be viewed in the monitoring dashboard. Consider checking for any trends or anomalies in the data."
-            else:
-                return "No recent monitoring data is available. Please check the monitoring system status and ensure sensors are functioning properly."
+        # Save query to history in background
+        background_tasks.add_task(
+            ai_service.save_query,
+            current_user.id,
+            request.query,
+            result,
+            db
+        )
         
-        elif any(word in query_lower for word in ["document", "report", "file"]):
-            docs = context_data.get("documents", [])
-            doc_count = len(docs)
-            
-            if doc_count > 0:
-                return f"I found {doc_count} documents in the system. You can search and access these documents through the documents section. Recent uploads include various reports and analysis documents."
-            else:
-                return "No documents are currently available in the system. Consider uploading relevant reports, analysis documents, or compliance records."
+        # Format response
+        response = AIQueryResponse(
+            response=result.response,
+            query_intent={
+                "type": result.query_intent.type,
+                "data_types": result.query_intent.data_types,
+                "time_range": result.query_intent.time_range,
+                "confidence": result.query_intent.confidence
+            },
+            analysis=result.analysis or {},
+            data_summary=result.data_summary or {},
+            recommendations=result.recommendations or [],
+            visualization_suggestions=[],  # Not implemented in fallback mode
+            sources=[source.get("title", "") for source in (result.sources or [])],
+            confidence_score=result.confidence_score,
+            processing_time=result.processing_time,
+            timestamp=datetime.utcnow().isoformat()
+        )
         
-        elif any(word in query_lower for word in ["compliance", "regulation", "requirement"]):
-            assessments = context_data.get("compliance", [])
-            assessment_count = len(assessments)
-            
-            if assessment_count > 0:
-                return f"I found {assessment_count} compliance assessments in the system. These assessments track regulatory compliance and can be reviewed in the compliance section."
-            else:
-                return "No compliance assessments are currently available. Consider conducting regular compliance reviews and uploading assessment results to the system."
+        logger.info(f"AI query completed for user {current_user.id} with confidence {response.confidence_score}")
         
-        else:
-            return "I understand your query about the TSF system. To provide more specific information, I would need access to relevant data. Please check the monitoring dashboard, documents section, or compliance records for detailed information. If you have specific questions about alerts, water levels, documents, or compliance, I can help guide you to the appropriate data sources."
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error processing AI query: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process query: {str(e)}"
+        )
+
+@router.get("/history", response_model=QueryHistoryResponse)
+def get_query_history(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get user's AI query history
     
-    def _analyze_data_trends(self, data: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-        """Analyze data for trends and patterns"""
-        analysis = {
-            "trends": [],
-            "anomalies": [],
-            "risks": []
+    Returns a paginated list of previous queries and their responses
+    """
+    
+    # Check permissions
+    if not _has_ai_query_permission(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions to access query history"
+        )
+    
+    try:
+        # Get query history
+        history = ai_service.get_query_history(
+            user_id=current_user.id,
+            db=db,
+            limit=limit
+        )
+        
+        # Format response
+        query_items = []
+        for item in history:
+            query_items.append(QueryHistoryItem(
+                id=item.get("id", 0),
+                query=item.get("query", ""),
+                response_preview=item.get("response_preview", ""),
+                timestamp=item.get("timestamp", ""),
+                confidence_score=item.get("confidence_score", 0.0)
+            ))
+        
+        return QueryHistoryResponse(
+            queries=query_items,
+            total_count=len(query_items)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting query history: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve query history"
+        )
+
+@router.post("/documents/{document_id}/index")
+async def index_document_for_ai(
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Index a document for AI query processing
+    
+    This endpoint adds a document to the AI knowledge base so it can be
+    searched and referenced in future queries.
+    """
+    
+    # Check permissions - only admin users can index documents
+    if current_user.role not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value, UserRole.ENGINEER_OF_RECORD.value]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions to index documents for AI"
+        )
+    
+    try:
+        # Add document to knowledge base in background
+        background_tasks.add_task(
+            ai_service.add_document_to_knowledge_base,
+            document_id,
+            db
+        )
+        
+        logger.info(f"Document {document_id} queued for AI indexing by user {current_user.id}")
+        
+        return {
+            "message": "Document queued for AI indexing",
+            "document_id": document_id,
+            "status": "processing"
         }
         
-        try:
-            # Simple trend analysis
-            if data:
-                # Check for alerts
-                alerts = [item for item in data if item.get("type") == "alert"]
-                if alerts:
-                    analysis["risks"].append(f"Found {len(alerts)} active alerts requiring attention")
-                
-                # Check for recent activity
-                recent_items = [item for item in data if "timestamp" in item]
-                if recent_items:
-                    analysis["trends"].append(f"Recent activity detected with {len(recent_items)} data points")
-                
-                # Check for compliance issues
-                compliance_items = [item for item in data if item.get("type") == "compliance"]
-                if compliance_items:
-                    low_scores = [item for item in compliance_items if item.get("score", 100) < 80]
-                    if low_scores:
-                        analysis["risks"].append(f"Found {len(low_scores)} compliance assessments with scores below 80%")
-            
-        except Exception as e:
-            logger.error(f"Error analyzing data trends: {e}")
-        
-        return analysis
+    except Exception as e:
+        logger.error(f"Error indexing document for AI: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to index document for AI"
+        )
+
+@router.get("/capabilities")
+async def get_ai_capabilities(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get information about AI query capabilities
     
-    def _generate_recommendations(self, intent: QueryIntent, analysis: Dict[str, List[str]]) -> List[str]:
-        """Generate recommendations based on intent and analysis"""
-        recommendations = []
-        
-        try:
-            if intent.type == "alert":
-                recommendations.extend([
-                    "Review all active alerts immediately",
-                    "Check sensor calibration and maintenance schedules",
-                    "Update emergency response procedures if needed"
-                ])
-            
-            elif intent.type == "monitoring":
-                recommendations.extend([
-                    "Regularly review monitoring data for trends",
-                    "Set up automated alerts for critical parameters",
-                    "Schedule sensor maintenance and calibration"
-                ])
-            
-            elif intent.type == "compliance":
-                recommendations.extend([
-                    "Schedule regular compliance reviews",
-                    "Update compliance documentation as needed",
-                    "Train staff on regulatory requirements"
-                ])
-            
-            elif intent.type == "document":
-                recommendations.extend([
-                    "Organize documents by category and date",
-                    "Regularly update technical documentation",
-                    "Ensure all reports are properly archived"
-                ])
-            
-            # Add general recommendations
-            if analysis.get("risks"):
-                recommendations.append("Address identified risks promptly")
-            
-            if not recommendations:
-                recommendations.append("Continue monitoring system performance and data quality")
-                
-        except Exception as e:
-            logger.error(f"Error generating recommendations: {e}")
-            recommendations = ["Monitor system performance and data quality"]
-        
-        return recommendations
+    Returns information about what types of queries the AI can handle
+    and any current limitations.
+    """
     
-    async def process_query(
-        self, 
-        query: str, 
-        db: AsyncSession, 
-        user: User,
-        include_sources: bool = True,
-        include_analysis: bool = True
-    ) -> QueryResponse:
-        """Process a user query and return AI response"""
-        start_time = time.time()
-        
-        try:
-            # Analyze query intent
-            intent = self._analyze_query_intent(query)
-            
-            # Gather relevant data
-            monitoring_data = await self._gather_monitoring_data(db, intent)
-            document_data = await self._gather_document_data(db, intent)
-            compliance_data = await self._gather_compliance_data(db, intent)
-            
-            context_data = {
-                "monitoring": monitoring_data,
-                "documents": document_data,
-                "compliance": compliance_data
-            }
-            
-            # Generate response
-            response_text = self._generate_response(query, context_data, intent)
-            
-            # Analyze data trends
-            analysis = self._analyze_data_trends(monitoring_data + document_data + compliance_data) if include_analysis else {}
-            
-            # Generate recommendations
-            recommendations = self._generate_recommendations(intent, analysis) if include_analysis else []
-            
-            # Prepare data summary
-            data_summary = {
-                "monitoring_readings_count": len(monitoring_data),
-                "documents_count": len(document_data),
-                "compliance_assessments_count": len(compliance_data)
-            }
-            
-            # Prepare sources if requested
-            sources = []
-            if include_sources:
-                sources = self._prepare_sources(context_data)
-            
-            processing_time = time.time() - start_time
-            
-            return QueryResponse(
-                response=response_text,
-                query_intent=intent,
-                confidence_score=intent.confidence,
-                processing_time=processing_time,
-                analysis=analysis if include_analysis else None,
-                recommendations=recommendations if include_analysis else None,
-                data_summary=data_summary,
-                sources=sources if include_sources else None
-            )
-            
-        except Exception as e:
-            logger.error(f"Error processing query: {e}")
-            processing_time = time.time() - start_time
-            
-            return QueryResponse(
-                response="I apologize, but I encountered an error while processing your query. Please try again or contact support if the issue persists.",
-                query_intent=QueryIntent(type="error", data_types=[], confidence=0.0),
-                confidence_score=0.0,
-                processing_time=processing_time
-            )
+    # Check permissions
+    if not _has_ai_query_permission(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions to access AI capabilities"
+        )
     
-    def _prepare_sources(self, context_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        """Prepare source information for the response"""
-        sources = []
-        
-        try:
-            for data_type, items in context_data.items():
-                for item in items[:5]:  # Limit to 5 items per type
-                    source = {
-                        "type": data_type,
-                        "id": item.get("id"),
-                        "title": item.get("title") or item.get("station") or f"{data_type.title()} Data",
-                        "timestamp": item.get("timestamp") or item.get("uploaded_at") or item.get("assessment_date"),
-                        "description": item.get("description") or item.get("message") or ""
-                    }
-                    sources.append(source)
-                    
-        except Exception as e:
-            logger.error(f"Error preparing sources: {e}")
-        
-        return sources
-    
-    async def index_document_for_ai(self, document_content: str, document_id: str, metadata: Dict[str, Any]) -> bool:
-        """Index a document for AI search (placeholder for now)"""
-        logger.info(f"Document indexing requested for document {document_id} (not implemented in fallback mode)")
-        return True
-    
-    def get_ai_capabilities(self) -> Dict[str, Any]:
-        """Get AI system capabilities and status"""
-        return {
-            "ai_status": {
-                "langchain": False,
-                "openai": False,
-                "chromadb": False,
-                "vector_store": False,
-                "llm": False,
-                "embeddings": False
+    capabilities = {
+        "query_types": {
+            "monitoring": {
+                "description": "Analyze monitoring data, trends, and alerts",
+                "examples": [
+                    "Show me water level trends for the last month",
+                    "What are the current critical alerts?",
+                    "Analyze pore pressure data from station A"
+                ]
             },
-            "query_types": {
-                "monitoring": {
-                    "description": "Query monitoring data, sensor readings, and alerts",
-                    "examples": [
-                        "What are the current monitoring alerts?",
-                        "Show me water level trends for the last month",
-                        "Are there any critical sensor readings?"
-                    ]
-                },
-                "documents": {
-                    "description": "Search and analyze documents and reports",
-                    "examples": [
-                        "Find documents about stability analysis",
-                        "Show me recent technical reports",
-                        "Search for compliance documentation"
-                    ]
-                },
-                "compliance": {
-                    "description": "Query compliance assessments and regulatory requirements",
-                    "examples": [
-                        "What compliance requirements are due this month?",
-                        "Show me recent compliance assessments",
-                        "Are we meeting regulatory standards?"
-                    ]
-                },
-                "analysis": {
-                    "description": "Get AI-powered analysis and insights",
-                    "examples": [
-                        "Analyze the risk factors for our TSF",
-                        "What trends do you see in the monitoring data?",
-                        "Provide recommendations for improving safety"
-                    ]
-                },
-                "prediction": {
-                    "description": "Get predictions and forecasts based on data",
-                    "examples": [
-                        "Predict water level trends for the next quarter",
-                        "Forecast potential issues based on current data",
-                        "What might happen if current trends continue?"
-                    ]
-                }
+            "document": {
+                "description": "Search and analyze documents and reports",
+                "examples": [
+                    "Find documents about stability analysis",
+                    "Summarize the latest compliance report",
+                    "What does the geotechnical assessment say about slope stability?"
+                ]
             },
-            "features": {
-                "natural_language_processing": False,
-                "document_search": False,
-                "data_analysis": True,
-                "trend_analysis": True,
-                "recommendations": True,
-                "multi_source_integration": True
+            "compliance": {
+                "description": "Check compliance status and requirements",
+                "examples": [
+                    "What compliance requirements are due this month?",
+                    "Show me the current compliance status",
+                    "Which requirements need attention?"
+                ]
+            },
+            "prediction": {
+                "description": "Generate predictions and forecasts",
+                "examples": [
+                    "Predict water level trends for the next quarter",
+                    "What are the risk factors for the next assessment?",
+                    "Forecast potential stability issues"
+                ]
+            },
+            "alert": {
+                "description": "Analyze alerts and risk assessment",
+                "examples": [
+                    "What caused the recent critical alert?",
+                    "Analyze the risk level of current alerts",
+                    "What actions should be taken for these warnings?"
+                ]
             }
+        },
+        "data_sources": [
+            "Monitoring station readings",
+            "Document repository",
+            "Compliance assessments",
+            "Historical data",
+            "Regulatory requirements"
+        ],
+        "features": [
+            "Natural language processing",
+            "Semantic document search",
+            "Trend analysis",
+            "Risk assessment",
+            "Predictive insights",
+            "Automated recommendations",
+            "Visualization suggestions"
+        ],
+        "limitations": [
+            "Requires OpenAI API key for full functionality",
+            "Document indexing may take time",
+            "Historical data limited to available records",
+            "Predictions based on available data patterns"
+        ],
+        "ai_status": {
+            "openai_configured": bool(ai_service.llm is not None),
+            "vector_store_available": bool(ai_service.vector_store is not None),
+            "embeddings_available": bool(ai_service.embeddings is not None)
         }
+    }
     
-    def get_ai_health(self) -> Dict[str, Any]:
-        """Get AI system health status"""
-        return {
-            "status": "limited",
-            "components": {
-                "langchain": False,
-                "openai": False,
-                "chromadb": False,
-                "vector_store": False
+    return capabilities
+
+@router.get("/health")
+async def ai_health_check(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Check AI system health and status
+    
+    Returns the current status of AI components and their availability.
+    """
+    
+    # Check permissions
+    if not _has_ai_query_permission(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions to access AI health status"
+        )
+    
+    health_status = {
+        "status": "healthy",
+        "components": {
+            "llm": {
+                "status": "available" if ai_service.llm else "unavailable",
+                "model": "OpenAI GPT-4" if ai_service.llm else "None"
             },
-            "capabilities": {
-                "ai_responses": False,
-                "document_search": False,
-                "embeddings": False
+            "embeddings": {
+                "status": "available" if ai_service.embeddings else "unavailable",
+                "model": "OpenAI text-embedding-ada-002" if ai_service.embeddings else "None"
             },
-            "timestamp": datetime.utcnow().isoformat()
-        } 
+            "vector_store": {
+                "status": "available" if ai_service.vector_store else "unavailable",
+                "type": "ChromaDB"
+            }
+        },
+        "capabilities": {
+            "natural_language_processing": bool(ai_service.llm),
+            "semantic_search": bool(ai_service.embeddings and ai_service.vector_store),
+            "document_analysis": bool(ai_service.llm and ai_service.embeddings),
+            "monitoring_analysis": bool(ai_service.llm),
+            "compliance_analysis": bool(ai_service.llm)
+        }
+    }
+    
+    # Determine overall status
+    if not ai_service.llm:
+        health_status["status"] = "degraded"
+        health_status["message"] = "AI responses limited - OpenAI not configured"
+    elif not ai_service.embeddings or not ai_service.vector_store:
+        health_status["status"] = "degraded"
+        health_status["message"] = "Document search limited - vector store not available"
+    
+    return health_status
+
+def _has_ai_query_permission(user: User) -> bool:
+    """Check if user has permission to use AI query functionality"""
+    allowed_roles = [
+        UserRole.SUPER_ADMIN.value,
+        UserRole.ADMIN.value,
+        UserRole.ENGINEER_OF_RECORD.value,
+        UserRole.TSF_OPERATOR.value,
+        UserRole.REGULATOR.value,
+        UserRole.MANAGEMENT.value,
+        UserRole.CONSULTANT.value
+    ]
+    
+    return user.role in allowed_roles 
