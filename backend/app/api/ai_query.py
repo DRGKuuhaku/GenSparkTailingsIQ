@@ -6,10 +6,11 @@ This module provides REST API endpoints for natural language queries,
 document search, monitoring analysis, and predictive insights.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 import logging
+from datetime import datetime
 
 from ..core.database import get_db
 from ..core.security import get_current_user
@@ -55,7 +56,7 @@ class QueryHistoryResponse(BaseModel):
     total_count: int
 
 @router.post("/submit", response_model=AIQueryResponse)
-async def submit_ai_query(
+def submit_ai_query(
     request: AIQueryRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -83,11 +84,12 @@ async def submit_ai_query(
         logger.info(f"Processing AI query from user {current_user.id}: {request.query[:100]}...")
         
         # Process the query
-        result = await ai_service.process_query(
+        result = ai_service.process_query(
             query=request.query,
-            user_id=current_user.id,
             db=db,
-            context=request.context
+            user=current_user,
+            include_sources=request.include_sources,
+            include_analysis=request.include_analysis
         )
         
         # Save query to history in background
@@ -101,16 +103,21 @@ async def submit_ai_query(
         
         # Format response
         response = AIQueryResponse(
-            response=result.get("response", "No response generated"),
-            query_intent=result.get("query_intent", {}),
-            analysis=result.get("analysis", {}),
-            data_summary=result.get("data_summary", {}),
-            recommendations=result.get("recommendations", []),
-            visualization_suggestions=result.get("visualization_suggestions", []),
-            sources=result.get("sources", []),
-            confidence_score=result.get("confidence_score", 0.0),
-            processing_time=result.get("processing_time", 0.0),
-            timestamp=result.get("timestamp", "")
+            response=result.response,
+            query_intent={
+                "type": result.query_intent.type,
+                "data_types": result.query_intent.data_types,
+                "time_range": result.query_intent.time_range,
+                "confidence": result.query_intent.confidence
+            },
+            analysis=result.analysis or {},
+            data_summary=result.data_summary or {},
+            recommendations=result.recommendations or [],
+            visualization_suggestions=[],  # Not implemented in fallback mode
+            sources=[source.get("title", "") for source in (result.sources or [])],
+            confidence_score=result.confidence_score,
+            processing_time=result.processing_time,
+            timestamp=datetime.utcnow().isoformat()
         )
         
         logger.info(f"AI query completed for user {current_user.id} with confidence {response.confidence_score}")
@@ -125,9 +132,9 @@ async def submit_ai_query(
         )
 
 @router.get("/history", response_model=QueryHistoryResponse)
-async def get_query_history(
-    skip: int = Field(default=0, ge=0),
-    limit: int = Field(default=20, ge=1, le=100),
+def get_query_history(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -146,7 +153,7 @@ async def get_query_history(
     
     try:
         # Get query history
-        history = await ai_service.get_query_history(
+        history = ai_service.get_query_history(
             user_id=current_user.id,
             db=db,
             limit=limit
