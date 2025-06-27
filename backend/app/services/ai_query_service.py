@@ -16,7 +16,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @dataclass
 class QueryIntent:
@@ -333,14 +333,14 @@ class AIQueryService:
         
         try:
             # Call OpenAI API
-            completion = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",  # or "gpt-4" if you have access
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are an AI assistant for tailings facility management."},
                     {"role": "user", "content": query}
                 ]
             )
-            ai_response = completion.choices[0].message.content
+            ai_response = response.choices[0].message.content
 
             processing_time = time.time() - start_time
 
@@ -397,12 +397,9 @@ class AIQueryService:
         """Get AI system capabilities and status"""
         return {
             "ai_status": {
-                "langchain": False,
-                "openai": False,
-                "chromadb": False,
-                "vector_store": False,
-                "llm": False,
-                "embeddings": False
+                "openai_configured": True,
+                "vector_store_available": False,
+                "embeddings_available": False
             },
             "query_types": {
                 "monitoring": {
