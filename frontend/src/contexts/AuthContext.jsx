@@ -26,7 +26,7 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  }, [token, setCurrentUser, setToken, setLoading]);
+  }, [token]); // Removed setCurrentUser, setToken, setLoading as they are stable
 
   useEffect(() => {
     // Check if user is already authenticated on app load
@@ -171,3 +171,4 @@ export const useAuth = () => {
 };
 
 export default AuthContext;
+
