@@ -27,6 +27,7 @@ from .api import auth, synthetic_data
 from .api.admin import users as admin_users
 from .models.user import User, UserCreate, UserRole, UserStatus
 from .services.user_service import UserService
+from .api.ai_query import router as ai_query_router
 
 # Configure logging
 logging.basicConfig(
@@ -366,6 +367,12 @@ app.include_router(
     prefix=f"{settings.API_V1_STR}/synthetic-data", 
     tags=["synthetic-data"],
     dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    ai_query_router,
+    prefix=f"{settings.API_V1_STR}",
+    tags=["ai-query"]
 )
 
 # Store startup time
