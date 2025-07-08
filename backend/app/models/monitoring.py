@@ -82,8 +82,8 @@ class MonitoringReading(Base):
     is_anomaly = Column(Boolean, default=False)
     alert_level = Column(String(20), default=AlertLevel.NORMAL.value)
 
-    # Reading metadata (renamed from metadata to avoid SQLAlchemy conflict)
-    reading_metadata = Column(JSON, default={})
+    # Metadata
+    metadata = Column(JSON, default={})
     notes = Column(Text)
 
     # Audit
@@ -169,7 +169,7 @@ class MonitoringReadingCreate(BaseModel):
     unit: str
     quality_code: Optional[str] = "Good"
     raw_value: Optional[float] = None
-    reading_metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = {}
     notes: Optional[str] = None
 
 class MonitoringReadingResponse(BaseModel):
@@ -182,7 +182,7 @@ class MonitoringReadingResponse(BaseModel):
     is_validated: bool
     is_anomaly: bool
     alert_level: str
-    reading_metadata: Dict[str, Any]
+    metadata: Dict[str, Any]
     notes: Optional[str]
     created_at: datetime
 
