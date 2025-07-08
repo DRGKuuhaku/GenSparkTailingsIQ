@@ -28,6 +28,7 @@ from .api.admin import users as admin_users
 from .models.user import User, UserCreate, UserRole, UserStatus
 from .services.user_service import UserService
 from .api.ai_query import router as ai_query_router
+from .api.document_upload import router as document_upload_router
 
 # Configure logging
 logging.basicConfig(
@@ -373,6 +374,12 @@ app.include_router(
     ai_query_router,
     prefix=f"{settings.API_V1_STR}",
     tags=["ai-query"]
+)
+
+app.include_router(
+    document_upload_router,
+    prefix=f"{settings.API_V1_STR}",
+    tags=["documents"]
 )
 
 # Store startup time
