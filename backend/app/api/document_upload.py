@@ -12,7 +12,7 @@ import docx
 router = APIRouter()
 
 UPLOAD_DIR = settings.UPLOAD_DIR if hasattr(settings, 'UPLOAD_DIR') else './uploads'
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# DO NOT call os.makedirs here!
 
 # Helper to extract text from PDF
 def extract_pdf_text(file_path):
@@ -40,6 +40,8 @@ def extract_txt_text(file_path):
 
 @router.post('/documents/upload')
 async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    # Ensure upload directory exists at runtime (not at import time)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
     # Save file to disk
     filename = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, filename)
