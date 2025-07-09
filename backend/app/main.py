@@ -171,7 +171,12 @@ app = FastAPI(
 # Security middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "https://tailingsiq-frontend.vercel.app",
+        "https://*.tailingsiq.com"
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
