@@ -46,6 +46,12 @@ const navigationItems = [
     permission: 'canViewDocuments',
   },
   {
+    text: 'Upload Document',
+    icon: <Description />,
+    path: '/upload',
+    permission: 'canUploadDocuments',
+  },
+  {
     text: 'Monitoring',
     icon: <MonitorHeart />,
     path: '/monitoring',

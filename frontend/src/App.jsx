@@ -1,6 +1,6 @@
 import React, { Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { Box, CircularProgress } from '@mui/material';
+import { Box } from '@mui/material';
 
 import { useAuth } from './contexts/AuthContext';
 import { useUserRole } from './contexts/UserRoleContext';
@@ -16,6 +16,7 @@ const AIQueryPage = React.lazy(() => import('./pages/AIQueryPage'));
 const CompliancePage = React.lazy(() => import('./pages/CompliancePage'));
 const UsersPage = React.lazy(() => import('./pages/UsersPage'));
 const LoginPage = React.lazy(() => import('./pages/LoginPage'));
+const DocumentsUploadPage = React.lazy(() => import('./pages/DocumentsUploadPage'));
 
 const ProtectedRoute = ({ children, requiredPermission }) => {
   const { currentUser, loading } = useAuth();
@@ -124,6 +125,15 @@ function App() {
           element={
             <ProtectedRoute requiredPermission="canAccessAdminPanel">
               <UsersPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/upload"
+          element={
+            <ProtectedRoute requiredPermission="canUploadDocuments">
+              <DocumentsUploadPage />
             </ProtectedRoute>
           }
         />
