@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { tailingsIQApi } from '../api/tailingsIQApi';
 
 const AuthContext = createContext();
@@ -8,16 +8,7 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(localStorage.getItem('tailingsiq_token'));
 
-  useEffect(() => {
-    // Check if user is already authenticated on app load
-    if (token) {
-      validateToken();
-    } else {
-      setLoading(false);
-    }
-  }, [token]);
-
-  const validateToken = async () => {
+  const validateToken = useCallback(async () => {
     try {
       // Set the token in the API client
       tailingsIQApi.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -35,7 +26,16 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]); // Removed setCurrentUser, setToken, setLoading as they are stable
+
+  useEffect(() => {
+    // Check if user is already authenticated on app load
+    if (token) {
+      validateToken();
+    } else {
+      setLoading(false);
+    }
+  }, [token, validateToken]);
 
   const login = async (username, password) => {
     try {
@@ -171,3 +171,4 @@ export const useAuth = () => {
 };
 
 export default AuthContext;
+
