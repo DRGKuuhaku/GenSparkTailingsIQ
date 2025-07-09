@@ -21,33 +21,33 @@ class AIQueryRequest(BaseModel):
 class AIQueryResponse(BaseModel):
     answer: str
 
-# Simple keyword search for relevant document text
-def keyword_search_documents(db: Session, query: str, top_k: int = 1) -> List[str]:
-    # Search for documents containing any keyword from the query
-    keywords = [w.lower() for w in query.split() if len(w) > 2]
-    results = []
-    for doc in db.query(Document).filter(Document.extracted_text != None):
+# Retrieve all document texts from the database (up to a token limit)
+def get_all_documents_context(db: Session, max_chars: int = 6000) -> str:
+    docs = db.query(Document).filter(Document.extracted_text != None).all()
+    context_chunks = []
+    total_chars = 0
+    for i, doc in enumerate(docs):
         text = doc.extracted_text or ""
-        if any(kw in text.lower() for kw in keywords):
-            results.append(text)
-    # Return the top_k longest matches (as a simple heuristic)
-    results = sorted(results, key=len, reverse=True)[:top_k]
-    return results
+        if not text.strip():
+            continue
+        chunk = f"Document {i+1} ({doc.original_filename}):\n{text[:1500]}"
+        if total_chars + len(chunk) > max_chars:
+            break
+        context_chunks.append(chunk)
+        total_chars += len(chunk)
+    return "\n\n".join(context_chunks)
 
 @router.post("/ai-query", response_model=AIQueryResponse)
 async def ai_query(request: AIQueryRequest, db: Session = Depends(get_db)):
-    """Handle AI query requests using OpenAI with RAG (keyword search)."""
+    """Handle AI query requests using OpenAI with all document context."""
     try:
-        # Get the latest user question
-        user_question = next((m.content for m in reversed(request.messages) if m.role == 'user'), None)
-        # Retrieve relevant document text
-        doc_contexts = keyword_search_documents(db, user_question or "", top_k=1)
-        # Prepend document context as a system message if found
+        # Retrieve all document context (up to a safe limit)
+        all_docs_context = get_all_documents_context(db, max_chars=6000)
         messages = []
-        if doc_contexts:
+        if all_docs_context:
             messages.append({
                 "role": "system",
-                "content": f"The following information is from uploaded engineering documents. Use it to answer the user's question if relevant.\n\n{doc_contexts[0][:2000]}"
+                "content": f"The following information is from all uploaded engineering documents. Use it to answer the user's question if relevant.\n\n{all_docs_context}"
             })
         # Add the rest of the chat history
         messages += [m.dict() for m in request.messages]
