@@ -114,7 +114,7 @@ class Settings(BaseSettings):
 
     # File Upload Configuration
     MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100MB
-    UPLOAD_DIR: str = "./uploads"
+    UPLOAD_DIR: str = "/tmp/uploads"
     ALLOWED_FILE_TYPES: List[str] = [
         "application/pdf",
         "application/msword",
