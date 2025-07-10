@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -126,6 +126,13 @@ class SyntheticComplianceData(Base):
     mitigation_measures = Column(Text)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class DatasetRow(Base):
+    __tablename__ = "dataset_rows"
+    id = Column(Integer, primary_key=True, index=True)
+    dataset_name = Column(String, nullable=True)  # Optional: to group by upload
+    row_data = Column(JSON, nullable=False)  # Store the row as a JSON object
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
 
 # Pydantic models for API responses
 from pydantic import BaseModel, Field
