@@ -1,12 +1,11 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
 from sqlalchemy.orm import Session
 from ..core.database import get_db
-from ..models.synthetic_data_models import SyntheticDataSet
+from ..models.synthetic_data_models import DatasetRow
 from ..core.config import settings
 import os
 import pandas as pd
 from datetime import datetime
-from ..models.synthetic_data_models import DatasetRow  # We'll define this model if not present
 
 router = APIRouter()
 
@@ -23,9 +22,12 @@ async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get
     os.remove(temp_path)
 
     # Store each row in DatasetRow table
+    rows_added = 0
     for _, row in df.iterrows():
-        db_row = DatasetRow(**row.to_dict())
+        db_row = DatasetRow(dataset_name=file.filename, row_data=row.to_dict())
         db.add(db_row)
+        rows_added += 1
     db.commit()
+    print(f"Uploaded dataset '{file.filename}' with {rows_added} rows.")
 
-    return {"success": True, "rows_added": len(df)} 
+    return {"success": True, "rows_added": rows_added} 
