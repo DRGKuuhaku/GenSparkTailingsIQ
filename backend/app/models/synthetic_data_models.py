@@ -34,7 +34,7 @@ class SyntheticDataSet(Base):
 
     # Relationships
     records = relationship("SyntheticDataRecord", back_populates="dataset")
-    creator = relationship("User", back_populates="synthetic_datasets")
+    #creator = relationship("User", back_populates="synthetic_datasets")
 
 class SyntheticDataRecord(Base):
     """Individual synthetic data records"""
