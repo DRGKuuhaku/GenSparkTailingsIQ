@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum
+from .user import User
 import uuid
 
 Base = declarative_base()
@@ -33,7 +34,7 @@ class SyntheticDataSet(Base):
 
     # Relationships
     records = relationship("SyntheticDataRecord", back_populates="dataset")
-    #creator = relationship("User", back_populates="synthetic_datasets")
+    creator = relationship("User", back_populates="synthetic_datasets")
 
 class SyntheticDataRecord(Base):
     """Individual synthetic data records"""
